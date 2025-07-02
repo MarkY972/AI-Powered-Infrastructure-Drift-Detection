@@ -1,0 +1,82 @@
+name: Terraform Drift Detection
+
+on:
+  schedule:
+    # Runs every 6 hours
+    - cron: "0 */6 * * *"
+  workflow_dispatch: # Allows manual triggering
+
+jobs:
+  drift_check:
+    runs-on: ubuntu-latest
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_REGION: "us-west-2" # Or your desired default region
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      # TF_LOG: "DEBUG" # Uncomment for verbose Terraform output
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "latest" # Or pin to a specific version
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10' # Or your preferred Python version
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+        working-directory: ./scripts
+
+      - name: Run Drift Detection Script
+        id: drift_detection
+        run: |
+          python drift_detector.py
+        working-directory: ./scripts
+        # Continue on error to allow for notification steps even if the script fails at some point
+        # However, the script itself has error handling, so this might be for catastrophic failures
+        continue-on-error: true
+
+      # Example: Create a GitHub Issue if drift is detected (needs more logic in script)
+      # - name: Create Issue on Drift
+      #   if: steps.drift_detection.outputs.drift_detected == 'true' # This output needs to be set by the python script
+      #   uses: actions/github-script@v6
+      #   with:
+      #     github-token: ${{ secrets.GITHUB_TOKEN }}
+      #     script: |
+      #       github.rest.issues.create({
+      #         owner: context.repo.owner,
+      #         repo: context.repo.repo,
+      #         title: "Infrastructure Drift Detected",
+      #         body: "Terraform drift detected. Please review the workflow logs for details and AI analysis."
+      #       })
+
+      # Placeholder for further actions:
+      # - Send Slack notification
+      # - Auto-apply safe changes (requires script to output whether changes are safe)
+      # - Create a Pull Request with the changes
+
+      - name: Upload Terraform Plan (if generated)
+        if: always() # Ensure this runs even if previous steps fail, to capture logs/plans for debugging
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-plan-and-logs
+          path: |
+            terraform/tfplan.json
+            terraform/tfplan.json.binary
+            # Add any other log files you might generate
+          if-no-files-found: ignore # Don't fail if plan files were not created (e.g. init failure)
+
+    permissions:
+      contents: read # Default, can be adjusted if the workflow needs to write to the repo (e.g., open PRs)
+      issues: write # If using the "Create Issue on Drift" step
+      # pull-requests: write # If creating PRs
+      actions: read # Default
