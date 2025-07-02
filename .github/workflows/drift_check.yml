@@ -1,0 +1,122 @@
+name: Terraform Drift Detection
+
+on:
+  schedule:
+    # Runs every 6 hours
+    - cron: "0 */6 * * *"
+  workflow_dispatch: # Allows manual triggering
+
+jobs:
+  drift_check:
+    runs-on: ubuntu-latest
+    env:
+      # AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }} # Recommended: Use OIDC instead
+      # AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }} # Recommended: Use OIDC instead
+      AWS_REGION: ${{ secrets.AWS_REGION || 'us-west-2' }} # Use secret or default
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      SNS_TOPIC_ARN: ${{ secrets.SNS_TOPIC_ARN }}
+      # TF_LOG: "DEBUG" # Uncomment for verbose Terraform output
+
+    permissions:
+      # Required for OIDC - token exchange with AWS
+      id-token: write
+      contents: read
+      # Required for the github-script to create issues
+      issues: write
+      # pull-requests: write # Add if you implement PR creation
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Recommended: Configure AWS credentials using OIDC
+      # This requires setting up an IAM OIDC provider in AWS and an IAM role.
+      # See README.md for more details on setting this up.
+      - name: Configure AWS Credentials (OIDC - Recommended)
+        uses: aws-actions/configure-aws-credentials@v4 # Updated to v4
+        with:
+          role-to-assume: ${{ secrets.AWS_OIDC_ROLE_ARN }} # e.g., arn:aws:iam::123456789012:role/GitHubAction-TerraformDriftDetectorRole
+          aws-region: ${{ env.AWS_REGION }}
+          # role-session-name: GitHubActionDriftDetection # Optional
+      # Fallback to static credentials if OIDC is not configured (less secure)
+      # Ensure AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY are set as secrets if using this.
+      # - name: Configure AWS Credentials (Static - Fallback)
+      #   if: secrets.AWS_OIDC_ROLE_ARN == '' # Only run if OIDC role is not provided
+      #   uses: aws-actions/configure-aws-credentials@v4
+      #   with:
+      #     aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      #     aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      #     aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "latest" # Or pin to a specific version
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10' # Or your preferred Python version
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+        working-directory: ./scripts
+
+      - name: Run Drift Detection Script
+        id: drift_detection # Give an id to this step to refer to its outputs
+        run: |
+          python drift_detector.py
+        working-directory: ./scripts
+        # If the script itself has an unhandled exception, this might be useful.
+        # However, the script is designed to output error states for ai_parsed_recommendation.
+        continue-on-error: true
+
+      - name: Log Drift Detection Outputs
+        if: always() # Log outputs even if previous steps had issues or no drift
+        run: |
+          echo "Drift detected output: ${{ steps.drift_detection.outputs.drift_detected }}"
+          echo "AI parsed recommendation output: ${{ steps.drift_detection.outputs.ai_parsed_recommendation }}"
+
+      # Example: Create a GitHub Issue if drift is detected and requires manual review
+      - name: Create Issue on Drift Requiring Manual Review
+        if: steps.drift_detection.outputs.drift_detected == 'true' && steps.drift_detection.outputs.ai_parsed_recommendation == 'MANUAL_REVIEW'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const { owner, repo } = context.repo;
+            const workflowRunUrl = `${process.env.GITHUB_SERVER_URL}/${owner}/${repo}/actions/runs/${process.env.GITHUB_RUN_ID}`;
+            const body = `
+              ## 🚨 Infrastructure Drift Detected - Manual Review Required 🚨
+
+              The AI-powered drift detection system has identified changes in the Terraform plan that require manual review.
+
+              **AI Recommendation:** MANUAL_REVIEW
+              **Drift Summary:** Please check the workflow run logs for details from \`drift_detector.py\`.
+              **Workflow Run:** ${workflowRunUrl}
+
+              Please investigate the uploaded Terraform plan artifact and the AI analysis in the logs.
+            `;
+            await github.rest.issues.create({
+              owner: owner,
+              repo: repo,
+              title: "[Drift Detection] Manual Review Required for EKS Infrastructure",
+              body: body,
+              labels: ['drift', 'manual-review-required'] // Optional: add labels
+            });
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+
+      - name: Upload Terraform Plan (if generated)
+        if: always() # Ensure this runs even if previous steps fail, to capture logs/plans for debugging
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-plan-and-logs
+          path: |
+            terraform/tfplan.json
+            terraform/tfplan.json.binary
+            # Add any other log files you might generate (e.g., drift_detector.log if script outputs to a file)
+          if-no-files-found: ignore # Don't fail if plan files were not created (e.g. init failure)
