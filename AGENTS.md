@@ -3,21 +3,19 @@
 Welcome, AI Agent! This document provides guidance for working on this project.
 
 ### Project Goal
-The primary goal of this project is to detect infrastructure drift in an AWS EKS environment managed by Terraform, analyze the drift using an AI (like yourself), and notify operators. Future enhancements might include auto-remediation for safe changes.
+The primary goal of this project is to deploy and manage a serverless application that can detect drift in its own infrastructure. The drift detection is performed by a Lambda function that runs on a schedule, and the deployment is automated via GitHub Actions.
 
 ### Key Components
-- **Terraform (`./terraform/`)**: Defines the AWS infrastructure (VPC, EKS cluster, Node Groups, SNS Topic).
-    - `main.tf`: Core resource definitions.
-    - `variables.tf`: Input variables.
-    - `outputs.tf`: Outputs from the configuration.
+- **Terraform (`./terraform/`)**: Defines the entire AWS infrastructure, including:
+    - `lambda.tf`: The core drift detection Lambda function and its scheduler.
+    - `sample_app.tf`: A sample serverless application (API Gateway + Lambda) to be monitored.
+    - `sns.tf`: The SNS topic for notifications.
 - **Python Script (`./scripts/drift_detector.py`)**:
-    - Runs `terraform plan -json`.
-    - Parses the plan output to identify drift.
-    - Sends drift details to an OpenAI model for analysis and recommendations.
-    - Publishes notifications to an AWS SNS topic.
+    - The core logic for the drift detection Lambda.
 - **GitHub Actions (`.github/workflows/drift_check.yml`)**:
-    - Schedules the execution of `drift_detector.py`.
-    - Manages secrets for AWS and OpenAI.
+    - A deployment pipeline that triggers on push to `main`.
+    - **Packaging**: It creates `drift_detector.zip` and `hello_world.zip` for the Lambda functions.
+    - **Deployment**: It runs `terraform apply` to deploy the infrastructure.
 - **Dependencies (`./requirements.txt`)**: Python package dependencies.
 - **Environment Configuration (`.env.example`, used as `.env`)**: For local development, stores API keys and other configurations.
 
@@ -57,10 +55,10 @@ The primary goal of this project is to detect infrastructure drift in an AWS EKS
 *   **Understanding Drift**: Your primary analysis task is to interpret the `terraform plan` output. Focus on:
     *   What resources are changing?
     *   What are the actions (create, update, delete, replace)?
-    *   What is the potential impact of these changes on a running EKS cluster and its workloads?
+    *   What is the potential impact of these changes on a running serverless application and its workloads?
 *   **Safety Recommendations**: When asked to recommend if changes are "safe to apply automatically," consider:
     *   **Destructive actions** (delete, replace) are generally unsafe unless very specific conditions are met.
-    *   **Updates to critical components** (EKS control plane, node groups, core networking) usually require manual review.
+    *   **Updates to critical components** (Lambda function code, IAM roles, triggers) usually require manual review.
     *   **Non-disruptive changes** (adding tags, updating certain metadata) might be considered safe.
     *   Always err on the side of caution. If unsure, recommend manual review.
 *   **Clarity**: Your analysis and recommendations should be clear, concise, and easily understandable by a DevOps engineer.
