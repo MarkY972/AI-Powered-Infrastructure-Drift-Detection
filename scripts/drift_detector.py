@@ -5,10 +5,6 @@ import logging
 import openai
 import boto3
 from botocore.exceptions import ClientError
-from dotenv import load_dotenv
-
-# Load environment variables from .env file
-load_dotenv()
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -209,10 +205,12 @@ def parse_terraform_plan(plan_file_path):
         logging.error(f"Error parsing Terraform plan: {e}")
         return None
 
-def main():
-    logging.info("Starting Terraform drift detection...")
+def handler(event, context):
+    logging.info("Starting Terraform drift detection from Lambda...")
 
-    plan_file = run_terraform_plan()
+    # In Lambda, the current working directory is /var/task. The terraform files are in a subdirectory.
+    terraform_dir = "/var/task/terraform"
+    plan_file = run_terraform_plan(terraform_dir)
 
     if plan_file:
         logging.info(f"Terraform plan generated: {plan_file}")
@@ -221,6 +219,7 @@ def main():
         if drift_info:
             logging.info("Drift detection summary:")
             logging.info(json.dumps(drift_info, indent=2))
+            ai_summary = None  # Initialize ai_summary
 
             if drift_info["has_drift"]:
                 logging.info("Drift detected. Attempting AI analysis...")
@@ -230,8 +229,6 @@ def main():
                     if ai_summary:
                         logging.info("AI Analysis Summary:")
                         logging.info(ai_summary)
-                        # Placeholder for acting on AI recommendation (e.g., apply, alert)
-                        # Placeholder for SNS notification
                     else:
                         logging.warning("AI analysis failed or returned no summary.")
                 else:
@@ -247,25 +244,23 @@ def main():
                     else:
                         message_body += "AI analysis was not available or failed."
                     publish_sns_message(sns_client, SNS_TOPIC_ARN, subject, message_body)
-
             else:
                 logging.info("No drift. All good!")
-                # Optionally, send a "healthy" notification if desired
-                # sns_client = get_sns_client()
-                # if sns_client and SNS_TOPIC_ARN:
-                #     publish_sns_message(sns_client, SNS_TOPIC_ARN, "Infrastructure Check: No Drift", "Terraform plan detected no changes.")
         else:
             logging.error("Failed to parse Terraform plan.")
-            # Send SNS notification about the error
             sns_client = get_sns_client()
             if sns_client and SNS_TOPIC_ARN:
                 publish_sns_message(sns_client, SNS_TOPIC_ARN, "Drift Detection Error: Parse Failure", "Failed to parse the Terraform plan. Check logs for details.")
     else:
         logging.error("Failed to generate Terraform plan.")
-        # Send SNS notification about the error
         sns_client = get_sns_client()
         if sns_client and SNS_TOPIC_ARN:
             publish_sns_message(sns_client, SNS_TOPIC_ARN, "Drift Detection Error: Plan Generation Failure", "Failed to generate the Terraform plan. Check logs for details.")
+
+    return {
+        'statusCode': 200,
+        'body': json.dumps('Drift detection complete.')
+    }
 
 def analyze_drift_with_ai(client, drift_info):
     """
@@ -312,7 +307,7 @@ Provide a concise summary of the changes.
 For each change, assess its potential impact (low, medium, high).
 Recommend whether it's safe to apply these changes automatically.
 If not safe, explain why and suggest manual review steps.
-Consider that this infrastructure is for an EKS cluster.
+Consider that this infrastructure is for a serverless application running on AWS Lambda.
 Output format should be clear and actionable. For example:
 
 Summary: [Your concise summary]
@@ -330,7 +325,7 @@ Manual Review Steps (if any): [Steps]
         response = client.chat.completions.create(
             model="gpt-3.5-turbo", # Or "gpt-4" if you have access and prefer it
             messages=[
-                {"role": "system", "content": "You are an expert DevOps engineer specializing in Terraform and AWS EKS. Your task is to analyze Terraform plan outputs for infrastructure drift."},
+                {"role": "system", "content": "You are an expert DevOps engineer specializing in Terraform and AWS Lambda. Your task is to analyze Terraform plan outputs for infrastructure drift."},
                 {"role": "user", "content": prompt}
             ],
             temperature=0.5, # Adjust for creativity vs. determinism
@@ -348,5 +343,3 @@ Manual Review Steps (if any): [Steps]
         logging.error(f"An unexpected error occurred during AI analysis: {e}")
         return None
 
-if __name__ == "__main__":
-    main()

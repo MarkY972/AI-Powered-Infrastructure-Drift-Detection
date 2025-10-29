@@ -1,31 +1,25 @@
-# AI-Powered Infrastructure Drift Detection and Auto-Healing (Conceptual)
+# AI-Powered Infrastructure Drift Detection for Serverless Applications
 
-This project demonstrates a system that periodically checks cloud infrastructure (provisioned by Terraform on AWS) for drift and uses an AI agent to evaluate the drift and recommend actions. The primary focus is on an EKS (Elastic Kubernetes Service) cluster.
+This project demonstrates a system that periodically checks cloud infrastructure (provisioned by Terraform on AWS) for drift and uses an AI agent to evaluate the drift and recommend actions. The primary focus is on a serverless application using AWS Lambda.
 
 ## Project Overview
 
 The system is designed to:
 
-1.  **Provision Infrastructure**: Define an AWS EKS cluster and supporting resources (VPC, Subnets, IAM Roles, SNS Topic) using Terraform.
-2.  **Detect Drift**: Periodically run `terraform plan` to identify any discrepancies between the desired state (Terraform code) and the actual state (AWS infrastructure).
-3.  **Parse Drift**: A Python script parses the `terraform plan` output.
-4.  **AI Analysis**: The parsed drift information is sent to an AI model (OpenAI GPT) for:
-    *   A summary of the detected changes.
-    *   An assessment of the potential impact of each change.
-    *   A recommendation on whether the changes are safe to apply automatically or require manual review.
-5.  **Notify**: Send notifications (e.g., via AWS SNS) to operators about detected drift, including the AI's analysis.
-6.  **Automate**: The entire process is orchestrated and scheduled using GitHub Actions.
+1.  **Deploy Infrastructure**: Use GitHub Actions to deploy a serverless application, including a drift detection Lambda function, to AWS using Terraform.
+2.  **Scheduled Drift Detection**: The drift detection Lambda function runs on a schedule (defined by a CloudWatch Event Rule) to periodically check the infrastructure for drift.
+3.  **AI-Powered Analysis**: When drift is detected, the Lambda function sends the details to an AI model for analysis, impact assessment, and a recommendation.
+4.  **Automated Notification**: The AI's analysis is then sent to an SNS topic to notify operators.
 
 ## Key Features & Technologies
 
-*   **Infrastructure as Code (IaC)**: [Terraform](https://www.terraform.io/) for provisioning and managing AWS resources.
-*   **Cloud Provider**: [Amazon Web Services (AWS)](https://aws.amazon.com/), specifically EKS, VPC, EC2 (for nodes), IAM, SNS.
-*   **Drift Detection & Parsing**: [Python](https://www.python.org/) script (`scripts/drift_detector.py`) using `subprocess` to run Terraform commands and `json` to parse output.
-*   **AI Agent Integration**: [OpenAI API](https://openai.com/docs) (GPT models like `gpt-3.5-turbo` or `gpt-4`) for analyzing drift.
-    *   `openai` Python library.
-*   **Automation & CI/CD**: [GitHub Actions](https://github.com/features/actions) for scheduled drift checks.
-*   **Notifications**: [AWS Simple Notification Service (SNS)](https://aws.amazon.com/sns/) for alerting operators.
-    *   `boto3` Python library.
+*   **Infrastructure as Code (IaC)**: [Terraform](https://www.terraform.io/) for provisioning and managing all AWS resources.
+*   **Cloud Provider**: [Amazon Web Services (AWS)](https://aws.amazon.com/), featuring Lambda, API Gateway, IAM, SNS, and CloudWatch Events.
+*   **Drift Detection Engine**: A Python script packaged as an AWS Lambda function, which runs `terraform plan` to detect drift.
+*   **AI Integration**: [OpenAI API](https://openai.com/docs) (GPT models) for intelligent drift analysis.
+*   **CI/CD**: [GitHub Actions](https://github.com/features/actions) for automated deployment of the entire serverless application.
+*   **Serverless Scheduling**: [AWS CloudWatch Events](https://aws.amazon.com/cloudwatch/features/) to trigger the drift detection Lambda on a regular schedule.
+*   **Notifications**: [AWS Simple Notification Service (SNS)](https://aws.amazon.com/sns/) for alerting.
 *   **Dependency Management**: `requirements.txt` for Python packages.
 *   **Environment Management**: `.env` file (from `.env.example`) for local configuration (API keys, etc.).
 
@@ -39,7 +33,8 @@ The system is designed to:
 ├── scripts/
 │   └── drift_detector.py       # Python script for Terraform plan, parse, AI analysis, SNS notification
 ├── terraform/
-│   ├── main.tf                 # Main Terraform configuration for EKS and supporting resources
+│   ├── lambda.tf               # Terraform configuration for the AWS Lambda function and related resources
+│   ├── main.tf                 # Main Terraform provider configuration
 │   ├── variables.tf            # Terraform input variables
 │   └── outputs.tf              # Terraform outputs
 ├── .env.example                # Example environment file for local development
@@ -53,7 +48,7 @@ The system is designed to:
 ### Prerequisites
 
 *   **AWS Account**: An active AWS account.
-*   **AWS CLI**: Configured with credentials that have permissions to create and manage EKS, VPC, IAM, SNS, and related resources.
+*   **AWS CLI**: Configured with credentials that have permissions to create and manage Lambda, IAM, SNS, and related resources.
 *   **Terraform CLI**: Installed (version specified in `drift_check.yml` or latest).
 *   **Python**: Installed (version specified in `drift_check.yml`, e.g., 3.10+).
 *   **OpenAI API Key**: An API key from OpenAI.
@@ -121,39 +116,27 @@ The system is designed to:
         ```
     *   Check the console output for logs and any SNS notifications you've configured.
 
-### GitHub Actions Setup (for automated runs)
+### GitHub Actions Deployment
 
-1.  **Push to GitHub**: Ensure the project code is pushed to your GitHub repository.
+1.  **Push to `main` Branch**: The GitHub Actions workflow is configured to trigger on any push to the `main` branch.
 2.  **Configure Repository Secrets**:
     *   In your GitHub repository, go to `Settings > Secrets and variables > Actions`.
     *   Add the following repository secrets:
         *   `AWS_ACCESS_KEY_ID`: Your AWS IAM user access key ID.
         *   `AWS_SECRET_ACCESS_KEY`: Your AWS IAM user secret access key.
         *   `OPENAI_API_KEY`: Your OpenAI API key.
-        *   `SNS_TOPIC_ARN`: The ARN of the SNS topic created by Terraform.
-        *   (Optional) `AWS_REGION`: If you want to override the default in the workflow.
-    *   **Important IAM Permissions**: The AWS credentials used must have sufficient permissions for Terraform to read AWS resources (for `plan`) and for `boto3` to publish to the SNS topic. If you later implement auto-apply, it will need write permissions.
-
-3.  **Enable and Monitor Workflow**:
-    *   The workflow in `.github/workflows/drift_check.yml` is configured to run on a schedule (e.g., every 6 hours) and can also be triggered manually.
-    *   Check the "Actions" tab in your GitHub repository to see workflow runs, logs, and uploaded artifacts (like `tfplan.json`).
+3.  **Monitor the Workflow**:
+    *   Check the "Actions" tab in your GitHub repository to see the deployment workflow runs and logs.
 
 ## How it Works
 
-1.  **Scheduled Execution**: GitHub Actions triggers the `drift_check.yml` workflow.
-2.  **Environment Setup**: The workflow checks out the code, sets up Terraform and Python, and installs dependencies.
-3.  **Drift Detection**: `drift_detector.py` is executed.
-    *   It runs `terraform init` and `terraform plan -out=tfplan.binary` in the `terraform` directory.
-    *   It then runs `terraform show -json tfplan.binary` to convert the plan to JSON.
-4.  **Drift Parsing**: The script parses `tfplan.json` to identify any changes (creations, updates, deletions).
-5.  **AI Analysis**:
-    *   If drift is detected, the relevant parts of the plan are formatted into a prompt.
-    *   This prompt is sent to the OpenAI API.
-    *   The AI returns an analysis, impact assessment, and safety recommendation.
-6.  **Notification**:
-    *   An SNS message is published containing the drift details and the AI's analysis.
-    *   Subscribers to the SNS topic (e.g., DevOps team via email) receive the alert.
-7.  **Logging & Artifacts**: Logs are available in the GitHub Actions run. The Terraform plan files are uploaded as artifacts for inspection.
+1.  **CI/CD Pipeline**: When code is pushed to the `main` branch, a GitHub Actions workflow is triggered.
+2.  **Lambda Packaging**: The workflow creates two zip files:
+    *   `drift_detector.zip`: Contains the `drift_detector.py` script, its Python dependencies, and the entire `/terraform` directory.
+    *   `hello_world.zip`: Contains a simple "Hello, World" Lambda function.
+3.  **Terraform Deployment**: The workflow then runs `terraform apply` to deploy all the resources defined in the `.tf` files, using the zip files as the source for the Lambda functions.
+4.  **Scheduled Drift Scan**: The deployed CloudWatch Event Rule triggers the drift detection Lambda on a fixed schedule.
+5.  **AI-Powered Analysis & Notification**: The Lambda function runs `terraform plan`, and if drift is detected, it sends the plan to the OpenAI API for analysis and publishes the results to an SNS topic.
 
 ## Potential Future Enhancements
 
@@ -167,7 +150,7 @@ The system is designed to:
     *   Fine-tune prompts for more specific or nuanced analysis.
     *   Use LangChain or similar frameworks for more complex AI interactions or chains of thought.
 *   **Cost Analysis**: Integrate AI to estimate the cost implications of planned changes.
-*   **Security Vulnerability Assessment**: Use AI to check if planned changes introduce known security vulnerabilities (e.g., by analyzing security group changes).
+*   **Security Vulnerability Assessment**: Use AI to check if planned changes introduce known security vulnerabilities.
 *   **Dashboard**: A simple web UI to view drift history and AI recommendations.
 *   **Terraform Backend Configuration**: Implement a proper Terraform backend (e.g., S3 with DynamoDB locking) for state management, especially crucial for CI/CD.
 *   **Testing**: Add unit tests for the Python script and potentially integration tests for the Terraform configurations.
@@ -176,7 +159,7 @@ The system is designed to:
 
 This project aims to showcase skills in:
 
-*   **Cloud Infrastructure Management**: AWS (EKS, VPC, IAM, SNS).
+*   **Cloud Infrastructure Management**: AWS (Lambda, IAM, SNS).
 *   **Infrastructure as Code (IaC)**: Terraform.
 *   **Automation & CI/CD**: GitHub Actions, Python scripting.
 *   **AI/LLM Integration**: OpenAI API for intelligent decision support.
